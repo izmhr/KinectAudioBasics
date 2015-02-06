@@ -26,10 +26,17 @@ void ofApp::setup(){
 	audioProcThread.start(&frameArrivedEvent, audioBeamFrameReader);
 
 	SafeRelease(audioSource);
+
+	//ofSetFrameRate(60);
 }
 
 //--------------------------------------------------------------
 void ofApp::update(){
+	std::stringstream strm;
+	strm << "fps: " << ofGetFrameRate();
+	ofSetWindowTitle(strm.str());
+	
+	audioProcThread.update();
 }
 
 //--------------------------------------------------------------

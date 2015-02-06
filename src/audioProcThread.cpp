@@ -5,7 +5,11 @@ AudioProcThread::AudioProcThread() :
 	beamAngleConfidence(0.0f),
 	accumulatedSquareSum(0.0f),
 	accumulatedSampleCount(0),
-	energyIndex(0)
+	energyIndex(0),
+	energyError(0.0f),
+	energyRefreshIndex(0),
+	newEnergyAvailable(0),
+	lastEnergyRefreshTime(NULL)
 {
 	ZeroMemory(energyBuffer, sizeof(energyBuffer));
 	ZeroMemory(energyDisplayBuffer, sizeof(energyDisplayBuffer));
@@ -19,10 +23,10 @@ void AudioProcThread::start(WAITABLE_HANDLE *_frameArrivedEvent, IAudioBeamFrame
 }
 
 void AudioProcThread::stop(){
-	this->frameArrivedEvent = NULL;
-	this->audioBeamFrameReader = NULL;
 	//stopThread();
 	waitForThread();
+	this->frameArrivedEvent = NULL;
+	this->audioBeamFrameReader = NULL;
 }
 
 void AudioProcThread::threadedFunction(){
@@ -80,10 +84,6 @@ void AudioProcThread::threadedFunction(){
 			SafeRelease(audioBeamFrameList);
 			SafeRelease(audioBeamFrameReference);
 			SafeRelease(audioBeamFrameArrivedEventArgs);
-
-			//if (SUCCEEDED(hr)){
-			//	std::cout << "succeeded" << std::endl;
-			//}
 		}
 		else if (WAIT_OBJECT_0 + 1 == result) {
 			std::cout << "WAIT_OBJECT_1" << std::endl;
@@ -96,16 +96,8 @@ void AudioProcThread::threadedFunction(){
 			hr = E_FAIL;
 			break;
 		}
-		//if (lock()){
-		//	// do something
-		//	std::cout << "thread" << std::endl;
-		//	unlock();
-		//	sleep(1000);
-		//}
-		//else {
-		//	// do something
-		//}
 	}
+	std::cout << "while end" << std::endl;
 }
 
 void AudioProcThread::processAudio(IAudioBeamSubFrame* audioBeamSubFrame){
@@ -158,7 +150,11 @@ void AudioProcThread::processAudio(IAudioBeamSubFrame* audioBeamSubFrame){
 			if (lock()){
 				beamAngle = fBeamAngle;
 				beamAngleConfidence = fBeamAngleConfidence;
-				//energyBuffer[energyIndex]
+
+				energyBuffer[energyIndex] = (cMinEnergy - fEnergy) / cMinEnergy;
+				newEnergyAvailable++;
+				// Ring Buffer
+				energyIndex = (energyIndex + 1) % cEnergyBufferLength;
 
 				unlock();
 			}
@@ -166,44 +162,94 @@ void AudioProcThread::processAudio(IAudioBeamSubFrame* audioBeamSubFrame){
 
 			}
 
+			// Œãˆ—
+			accumulatedSquareSum = 0.f;
+			accumulatedSampleCount = 0;
+
 		}
-
-		// Œãˆ—
-		accumulatedSquareSum = 0.f;
-		accumulatedSampleCount = 0;
-
-		//if (lock()){
-		//	beamAngle = fBeamAngle;
-		//	beamAngleConfidence = fBeamAngleConfidence;
-
-		//	unlock();
-		//}
-		//else{
-
-		//}
-
-		std::cout << "angle: " << 180.0f * fBeamAngle / static_cast<float>(PI) << " confidence: " << fBeamAngleConfidence << std::endl;
 	}
 }
 
 
-void AudioProcThread::draw(){
+void AudioProcThread::update(){
+
+	ULONGLONG previousRefreshTime = lastEnergyRefreshTime;
+	//ULONGLONG now = GetTickCount();
+	ULONGLONG now = GetTickCount64();
+		
+	lastEnergyRefreshTime = now;
+
+	// No need to refresh if there is no new energy available to render
+	if (newEnergyAvailable <= 0)
+	{
+		return;
+	}
+
 	if (lock()){
-		ofSetColor(255, 255, 255);
-		ofCircle(100, 100, 50);
-		ofSetColor(255, 0, 0);
-		ofSetLineWidth(2);
-		ofPushMatrix();
+		if (previousRefreshTime != NULL)
 		{
-			ofTranslate(100, 100, 0);
-			ofRotateZ(-180.0f * beamAngle / static_cast<float>(PI));
-			ofLine(0, 0, 0, 50);
+			// Calculate how many energy samples we need to advance since the last Update() call in order to
+			// have a smooth animation effect.
+			float energyToAdvance = energyError + (((now - previousRefreshTime) * cAudioSamplesPerSecond / (float)1000.0) / cAudioSamplesPerEnergySample);
+			int energySamplesToAdvance = MIN(newEnergyAvailable, (int)(energyToAdvance));
+			energyError = energyToAdvance - energySamplesToAdvance;
+			energyRefreshIndex = (energyRefreshIndex + energySamplesToAdvance) % cEnergyBufferLength;
+			newEnergyAvailable -= energySamplesToAdvance;
 		}
-		ofPopMatrix();
+
+		// Copy energy samples into buffer to be displayed, taking into account that energy
+		// wraps around in a circular buffer.
+		int baseIndex = (energyRefreshIndex + cEnergyBufferLength - cEnergySamplesToDisplay) % cEnergyBufferLength;
+		int samplesUntilEnd = cEnergyBufferLength - baseIndex;
+		if (samplesUntilEnd>cEnergySamplesToDisplay) {
+			memcpy_s(energyDisplayBuffer, cEnergySamplesToDisplay*sizeof(float), energyBuffer + baseIndex, cEnergySamplesToDisplay*sizeof(float));
+		}
+		else {
+			int samplesFromBeginning = cEnergySamplesToDisplay - samplesUntilEnd;
+			memcpy_s(energyDisplayBuffer, cEnergySamplesToDisplay*sizeof(float), energyBuffer + baseIndex, samplesUntilEnd*sizeof(float));
+			memcpy_s(energyDisplayBuffer + samplesUntilEnd, (cEnergySamplesToDisplay - samplesUntilEnd)*sizeof(float), energyBuffer, samplesFromBeginning*sizeof(float));
+		}
 
 		unlock();
 	}
 	else{
 
 	}
+}
+
+void AudioProcThread::draw() {
+
+	ofSetColor(255, 255, 255);
+	ofCircle(100, 100, 50);
+	ofSetColor(255, 0, 0);
+	ofSetLineWidth(1);
+	ofPushMatrix();
+	{
+		ofTranslate(100, 100, 0);
+		ofRotateZ(-180.0f * beamAngle / static_cast<float>(PI));
+		ofLine(0, 0, 0, 50);
+	}
+	ofPopMatrix();
+
+	ofPushMatrix();
+	{
+		ofTranslate(200, 200);
+		// Draw each energy sample as a centered vertical bar, where the length of each bar is
+		// proportional to the amount of energy it represents.
+		// Time advances from left to right, with current time represented by the rightmost bar.
+		for (UINT i = 0; i < cEnergySamplesToDisplay; ++i)
+		{
+			const int cHalfImageHeight = DISPLAY_HEIGHT / 2;
+
+			// Each bar has a minimum height of 1 (to get a steady signal down the middle) and a maximum height
+			// equal to the bitmap height.
+			int barHeight = static_cast<int>(MAX(1.0f, (energyDisplayBuffer[i] * DISPLAY_HEIGHT)));
+
+			// Center bar vertically on image
+			int top = cHalfImageHeight - (barHeight / 2);
+			int bottom = top + barHeight;
+			ofLine(i, top, i, bottom);
+		}
+	}
+	ofPopMatrix();
 }
