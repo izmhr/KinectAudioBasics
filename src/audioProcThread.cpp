@@ -1,6 +1,15 @@
 #include "audioProcThread.h"
 
-AudioProcThread::AudioProcThread(){
+AudioProcThread::AudioProcThread() :
+	beamAngle(0.0f),
+	beamAngleConfidence(0.0f),
+	accumulatedSquareSum(0.0f),
+	accumulatedSampleCount(0),
+	energyIndex(0)
+{
+	ZeroMemory(energyBuffer, sizeof(energyBuffer));
+	ZeroMemory(energyDisplayBuffer, sizeof(energyDisplayBuffer));
+	std::cout << "constructor" << std::endl;
 }
 
 void AudioProcThread::start(WAITABLE_HANDLE *_frameArrivedEvent, IAudioBeamFrameReader*	_audioBeamFrameReader){
@@ -11,7 +20,9 @@ void AudioProcThread::start(WAITABLE_HANDLE *_frameArrivedEvent, IAudioBeamFrame
 
 void AudioProcThread::stop(){
 	this->frameArrivedEvent = NULL;
-	stopThread();
+	this->audioBeamFrameReader = NULL;
+	//stopThread();
+	waitForThread();
 }
 
 void AudioProcThread::threadedFunction(){
@@ -105,7 +116,7 @@ void AudioProcThread::processAudio(IAudioBeamSubFrame* audioBeamSubFrame){
 	hr = audioBeamSubFrame->AccessUnderlyingBuffer(&cbRead, (BYTE **)&audioBuffer);
 
 	if (FAILED(hr)){
-
+		
 	}
 	else if (cbRead > 0){
 		DWORD nSampleCount = cbRead / sizeof(float);
@@ -116,15 +127,60 @@ void AudioProcThread::processAudio(IAudioBeamSubFrame* audioBeamSubFrame){
 		audioBeamSubFrame->get_BeamAngle(&fBeamAngle);
 		audioBeamSubFrame->get_BeamAngleConfidence(&fBeamAngleConfidence);
 
-		if (lock()){
-			beamAngle = fBeamAngle;
-			beamAngleConfidence = fBeamAngleConfidence;
+		// Calculate energy from audio
+		for (UINT i = 0; i < nSampleCount; i++){
+			accumulatedSquareSum += audioBuffer[i] * audioBuffer[i];
 
-			unlock();
-		}
-		else{
+			++accumulatedSampleCount;
+
+			if (accumulatedSampleCount < cAudioSamplesPerEnergySample){
+				continue;
+			}
+
+			// Each energy value will represent the logarithm of the mean of the
+			// sum of squares of a group of audio samples.
+			float fMeanSquare = accumulatedSquareSum / cAudioSamplesPerEnergySample;
+
+			if (fMeanSquare > 1.0f)
+			{
+				// A loud audio source right next to the sensor may result in mean square values
+				// greater than 1.0. Cap it at 1.0f for display purposes.
+				fMeanSquare = 1.0f;
+			}
+
+			float fEnergy = cMinEnergy;
+			if (fMeanSquare > 0.f)
+			{
+				// Convert to dB
+				fEnergy = 10.0f*log10(fMeanSquare);
+			}
+
+			if (lock()){
+				beamAngle = fBeamAngle;
+				beamAngleConfidence = fBeamAngleConfidence;
+				//energyBuffer[energyIndex]
+
+				unlock();
+			}
+			else{
+
+			}
 
 		}
+
+		// å„èàóù
+		accumulatedSquareSum = 0.f;
+		accumulatedSampleCount = 0;
+
+		//if (lock()){
+		//	beamAngle = fBeamAngle;
+		//	beamAngleConfidence = fBeamAngleConfidence;
+
+		//	unlock();
+		//}
+		//else{
+
+		//}
 
 		std::cout << "angle: " << 180.0f * fBeamAngle / static_cast<float>(PI) << " confidence: " << fBeamAngleConfidence << std::endl;
 	}
