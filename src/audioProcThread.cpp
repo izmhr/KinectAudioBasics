@@ -220,20 +220,23 @@ void AudioProcThread::update(){
 void AudioProcThread::draw() {
 
 	ofSetColor(255, 255, 255);
-	ofCircle(100, 100, 50);
+	ofCircle(480, 100, 50);
 	ofSetColor(255, 0, 0);
-	ofSetLineWidth(1);
+	ofSetLineWidth(2);
 	ofPushMatrix();
 	{
-		ofTranslate(100, 100, 0);
+		ofTranslate(480, 100, 0);
 		ofRotateZ(-180.0f * beamAngle / static_cast<float>(PI));
+		float scale = ofMap(beamAngleConfidence, 0.0f, 1.0f, 0.4f, 1.0f);
+		ofScale(scale, scale);
 		ofLine(0, 0, 0, 50);
 	}
 	ofPopMatrix();
 
+	ofSetLineWidth(1);
 	ofPushMatrix();
 	{
-		ofTranslate(200, 200);
+		ofTranslate(100, 200);
 		// Draw each energy sample as a centered vertical bar, where the length of each bar is
 		// proportional to the amount of energy it represents.
 		// Time advances from left to right, with current time represented by the rightmost bar.
